@@ -10,7 +10,7 @@ const int maxBrt                = 255;
 // 0 – wszystko wyłączone
 // 1–3 – mruganie obu LED (500, 200, 100 ms)
 // 4 – naprzemienne świecenie: LED1 → LED2
-// 5 – "światła w samolocie" (4-krokowy wzór)
+// 5 – światła antykolizyjne (Strobe lights)
 // 6 – bardzo szybkie miganie obu LED
 int mode                        = 0;
 const unsigned int intervals[]  = {0, 500, 200, 100};
@@ -20,7 +20,7 @@ const char* modeNames[]         = {
   "2 – Mruganie co 200 ms",
   "3 – Mruganie co 100 ms",
   "4 – Naprzemienne LED1/LED2",
-  "5 – Swiatelka w samolocie",
+  "5 – Światła antykolizyjne",
   "6 – Bardzo szybkie miganie"
 };
 
@@ -45,17 +45,12 @@ unsigned long lastAdjust     = 0;
 bool    ledOn                = false;
 unsigned long lastBlink      = 0;
 
-// dla trybu 5 (światła w samolocie)
-const unsigned long planeInterval = 200; // ms
-unsigned long lastPlaneStep       = 0;
-const int planeSteps = 4;
-byte planeSeq[planeSteps][2] = {
-  {1, 0},  // tylko LED1
-  {0, 1},  // tylko LED2
-  {1, 1},  // oba LED
-  {0, 0}   // oba wyłączone
-};
-int planeIndex = 0;
+// ---- STROBE (Tryb 5) ----
+// krótkie impulsy sekwencyjnie na LED1 (tył) i LED2 (skrzydło)
+const unsigned long strobeOn   = 50;   // ms stanu HIGH
+const unsigned long strobeOff  = 100;  // ms przerwy
+unsigned long lastStrobe       = 0;
+int strobeStage                = 0;    // 0: LED1 on, 1: off, 2: LED2 on, 3: off
 
 void setup() {
   for (int i = 0; i < 2; i++) {
@@ -78,31 +73,26 @@ void loop() {
     if (reading != buttonState) {
       buttonState = reading;
       if (buttonState == LOW) {
-        // przycisk w dół → start potencjalnego długiego przytrzymania
         pressTime = now;
         adjusting = false;
       } else {
-        // przycisk puszczony
         unsigned long held = now - pressTime;
         if (held < longPressTime && !adjusting) {
-          // krótkie kliknięcie → zmiana trybu
           mode = (mode + 1) % 7;
           Serial.println(modeNames[mode]);
         } else if (adjusting) {
-          // zakończenie regulacji jasności
           Serial.print("Final brightness = ");
           Serial.println(brightness);
         }
       }
     }
 
-    // 2. Wejście w tryb regulacji jasności po 3 s
+    // Wejście w tryb regulacji jasności po długim przytrzymaniu
     if (buttonState == LOW
         && !adjusting
         && (now - pressTime >= longPressTime)) {
       adjusting  = true;
       lastAdjust = now;
-      // wymuś poprawny kierunek startu
       adjustDir = (brightness <= minBrt) ? +1 :
                   (brightness >= maxBrt) ? -1 :
                   -1;
@@ -111,14 +101,12 @@ void loop() {
   }
   lastReading = reading;
 
-  // 3. Regulacja jasności (triangle wave między 120 a 255)
+  // 2. Regulacja jasności (triangle wave)
   if (adjusting && buttonState == LOW) {
     if (now - lastAdjust >= adjustInterval) {
       lastAdjust = now;
       brightness += adjustDir;
-      // utrzymaj w minBrt…maxBrt
       brightness = constrain(brightness, minBrt, maxBrt);
-      // odwróć kierunek na progach
       if (brightness == minBrt || brightness == maxBrt) {
         adjustDir = -adjustDir;
       }
@@ -127,13 +115,12 @@ void loop() {
       Serial.print(" Dir=");
       Serial.println(adjustDir);
     }
-    // ciągłe świecenie podczas regulacji
     analogWrite(ledPins[0], brightness);
     analogWrite(ledPins[1], brightness);
-    return;  // pomiń mruganie/sekwencje
+    return;
   }
 
-  // 4. Tryby podstawowe i dodatkowe
+  // 3. Tryby podstawowe i dodatkowe
   switch (mode) {
     case 0:  // wszystko wyłączone
       analogWrite(ledPins[0], 0);
@@ -158,20 +145,37 @@ void loop() {
       const unsigned long altInterval = 500;
       if (now - lastBlink >= altInterval) {
         lastBlink = now;
-        ledOn     = !ledOn;  // używamy ledOn jako przełącznik
+        ledOn     = !ledOn;
       }
       analogWrite(ledPins[0], ledOn ? brightness : 0);
       analogWrite(ledPins[1], ledOn ? 0 : brightness);
       break;
     }
 
-    case 5: { // "światła w samolocie" – 4-krokowa sekwencja
-      if (now - lastPlaneStep >= planeInterval) {
-        lastPlaneStep = now;
-        planeIndex = (planeIndex + 1) % planeSteps;
+    case 5: { // światła antykolizyjne (Strobe lights)
+      unsigned long interval = (strobeStage % 2 == 0) ? strobeOn : strobeOff;
+      if (now - lastStrobe >= interval) {
+        lastStrobe = now;
+        strobeStage = (strobeStage + 1) % 4;
       }
-      analogWrite(ledPins[0], planeSeq[planeIndex][0] ? brightness : 0);
-      analogWrite(ledPins[1], planeSeq[planeIndex][1] ? brightness : 0);
+      switch (strobeStage) {
+        case 0: // LED1 on (tył)
+          analogWrite(ledPins[0], brightness);
+          analogWrite(ledPins[1], 0);
+          break;
+        case 1: // off
+          analogWrite(ledPins[0], 0);
+          analogWrite(ledPins[1], 0);
+          break;
+        case 2: // LED2 on (skrzydło)
+          analogWrite(ledPins[0], 0);
+          analogWrite(ledPins[1], brightness);
+          break;
+        case 3: // off
+          analogWrite(ledPins[0], 0);
+          analogWrite(ledPins[1], 0);
+          break;
+      }
       break;
     }
 
