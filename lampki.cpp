@@ -10,7 +10,7 @@ const int maxBrt                = 255;
 // 0 – wszystko wyłączone
 // 1–3 – mruganie obu LED (500, 200, 100 ms)
 // 4 – naprzemienne świecenie: LED1 → LED2
-// 5 – światła antykolizyjne (Strobe lights)
+// 5 – światła antykolizyjne (ciągłe strobowanie LED1 ↔ LED2)
 // 6 – bardzo szybkie miganie obu LED
 int mode                        = 0;
 const unsigned int intervals[]  = {0, 500, 200, 100};
@@ -46,16 +46,12 @@ bool    ledOn                = false;
 unsigned long lastBlink      = 0;
 
 // ---- STROBE (Tryb 5) ----
-// krótkie impulsy sekwencyjnie na LED1 (tył) i LED2 (skrzydło)
-const unsigned long strobeOn   = 50;   // ms stanu HIGH
-const unsigned long strobeOff  = 100;  // ms przerwy
-unsigned long lastStrobe       = 0;
-int strobeStage                = 0;    // 0: LED1 on, 1: off, 2: LED2 on, 3: off
+const unsigned long strobeInterval = 100; // ms między zmianą diody
+unsigned long lastStrobe           = 0;
+bool strobeToggle                  = false;
 
 void setup() {
-  for (int i = 0; i < 2; i++) {
-    pinMode(ledPins[i], OUTPUT);
-  }
+  for (int i = 0; i < 2; i++) pinMode(ledPins[i], OUTPUT);
   pinMode(buttonPin, INPUT_PULLUP);
   Serial.begin(9600);
   Serial.println(modeNames[mode]);
@@ -122,26 +118,26 @@ void loop() {
 
   // 3. Tryby podstawowe i dodatkowe
   switch (mode) {
-    case 0:  // wszystko wyłączone
+    case 0:
       analogWrite(ledPins[0], 0);
       analogWrite(ledPins[1], 0);
       break;
 
-    case 1: // mruganie obu LED co 500 ms
-    case 2: // mruganie obu LED co 200 ms
-    case 3: { // mruganie obu LED co 100 ms
+    case 1:
+    case 2:
+    case 3: {
       unsigned int interval = intervals[mode];
       if (now - lastBlink >= interval) {
         lastBlink = now;
         ledOn     = !ledOn;
-        int level = ledOn ? brightness : 0;
-        analogWrite(ledPins[0], level);
-        analogWrite(ledPins[1], level);
+        int lvl   = ledOn ? brightness : 0;
+        analogWrite(ledPins[0], lvl);
+        analogWrite(ledPins[1], lvl);
       }
       break;
     }
 
-    case 4: { // naprzemienne świecenie LED1 → LED2 (500 ms)
+    case 4: { // naprzemienne LED1 → LED2 (500 ms)
       const unsigned long altInterval = 500;
       if (now - lastBlink >= altInterval) {
         lastBlink = now;
@@ -152,32 +148,34 @@ void loop() {
       break;
     }
 
-    case 5: { // światła antykolizyjne (Strobe lights)
-      unsigned long interval = (strobeStage % 2 == 0) ? strobeOn : strobeOff;
-      if (now - lastStrobe >= interval) {
-        lastStrobe = now;
-        strobeStage = (strobeStage + 1) % 4;
-      }
-      switch (strobeStage) {
-        case 0: // LED1 on (tył)
-          analogWrite(ledPins[0], brightness);
-          analogWrite(ledPins[1], 0);
-          break;
-        case 1: // off
-          analogWrite(ledPins[0], 0);
-          analogWrite(ledPins[1], 0);
-          break;
-        case 2: // LED2 on (skrzydło)
-          analogWrite(ledPins[0], 0);
-          analogWrite(ledPins[1], brightness);
-          break;
-        case 3: // off
-          analogWrite(ledPins[0], 0);
-          analogWrite(ledPins[1], 0);
-          break;
-      }
-      break;
-    }
+ case 5: { // światła antykolizyjne – realistyczny strobe
+  const unsigned long minPeriod = 900;   // ms przerwy między błyskami
+  const unsigned long maxPeriod = 1200;  // lekka nieregularność
+  const unsigned long strobeDuration = 40; // czas błysku (ms)
+
+  static unsigned long nextStrobeTime = 0;
+  static bool strobeActive = false;
+  static unsigned long strobeStart = 0;
+
+  if (!strobeActive && now >= nextStrobeTime) {
+    // start błysku
+    strobeActive = true;
+    strobeStart = now;
+    analogWrite(ledPins[0], brightness);
+    analogWrite(ledPins[1], brightness);
+  }
+
+  if (strobeActive && now - strobeStart >= strobeDuration) {
+    // koniec błysku
+    analogWrite(ledPins[0], 0);
+    analogWrite(ledPins[1], 0);
+    strobeActive = false;
+    nextStrobeTime = now + random(minPeriod, maxPeriod);
+  }
+  break;
+}
+
+
 
     case 6: { // bardzo szybkie miganie obu LED (50 ms)
       const unsigned long fastInterval = 50;
